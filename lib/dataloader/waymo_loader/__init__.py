@@ -95,9 +95,10 @@ def load_waymo_raw(base_dir, args):
                         range_image_r2 = decompress_range_image(
                             lidar_data.ri_return2.range_image_compressed
                         )
-                        range_image_r1[..., 1] = torch.clamp(
-                            range_image_r1[..., 1], max=1
-                        )
+                        range_image_r1[..., 1] = torch.tanh(range_image_r1[..., 1])
+                        # range_image_r1[..., 1] = torch.clamp(
+                        #     range_image_r1[..., 1], max=1
+                        # )
                         range_image_r1[..., 0:2][range_image_r1[..., 0:2] == -1] = 0
                 torch.save((range_image_r1, range_image_r2), decompressed_path)
 

@@ -44,7 +44,7 @@ class SceneLidar(Scene):
         self.train_lidar = lidar
         self.train_lidar.set_frames(train_frames, eval_frames)
 
-        print("[Loaded] background guassians")
+        print("[Loaded] background gaussians")
 
         # initialize objects with bounding boxes
         if args.dynamic:

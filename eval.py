@@ -17,9 +17,65 @@ from lib.utils.console_utils import *
 from lib.utils.image_utils import color_mapping
 from skimage.metrics import structural_similarity
 from tqdm import tqdm
+import point_cloud_utils as pcu
 
 colormap_ = 20
 
+def chamfer_distance(
+    source_pc: torch.Tensor,
+    target_pc: torch.Tensor,
+    chunk_size: Optional[int] = None,
+    normalize_with_target: bool = False,
+) -> torch.Tensor:
+    """Computes chamfer distance (minimum squared distance from every point to the other point cloud) between two point clouds.
+
+    Args:
+        source_pc: Source point cloud [N,3].
+        target_pc: Target point cloud [M,3].
+        chunk_size: Chunk size to use for computing chamfer distance. If None, use full point clouds.
+        normalize_with_target: Whether to normalize chamfer distance with target point cloud size.
+
+    Returns:
+        torch.Tensor: Chamfer distance between source and target.
+    """
+
+    min_dist_source_to_target = torch.tensor(0.0).to(source_pc.device)
+    min_dist_target_to_source = torch.tensor(0.0).to(source_pc.device)
+
+    # Add batch dimension as expected by torch.cdist
+    source_pc = source_pc.view(1, -1, 3)
+    target_pc = target_pc.view(1, -1, 3)
+
+    def _chamfer_dist(source, target):
+        dist = torch.cdist(source, target, p=2, compute_mode="use_mm_for_euclid_dist_if_necessary").pow(2)
+        dist = dist.view(source.shape[1], target.shape[1])
+        min_dist_source_to_target, _ = torch.min(dist, dim=1)
+        min_dist_target_to_source, _ = torch.min(dist, dim=0)
+        return min_dist_source_to_target.sum(), min_dist_target_to_source.sum()
+
+    if chunk_size is None:
+        min_dist_source_to_target, min_dist_target_to_source = _chamfer_dist(source_pc, target_pc)
+    else:
+        for i in range(0, source_pc.shape[1], chunk_size):
+            max_idx = min(i + chunk_size, source_pc.shape[1])
+            min_dist_source_to_target_add, _ = _chamfer_dist(source_pc[:, i:max_idx], target_pc)
+            min_dist_source_to_target_add = (
+                min_dist_source_to_target_add / target_pc.shape[1]
+                if normalize_with_target
+                else min_dist_source_to_target_add
+            )
+            min_dist_source_to_target += min_dist_source_to_target_add
+        for i in range(0, target_pc.shape[1], chunk_size):
+            max_idx = min(i + chunk_size, target_pc.shape[1])
+            min_dist_target_to_source_add, _ = _chamfer_dist(target_pc[:, i:max_idx], source_pc)
+            min_dist_target_to_source_add = (
+                min_dist_target_to_source_add / target_pc.shape[1]
+                if normalize_with_target
+                else min_dist_target_to_source_add
+            )
+            min_dist_target_to_source += min_dist_target_to_source_add
+
+    return min_dist_source_to_target + min_dist_target_to_source
 
 class LiDARRTMeter:
     def __init__(self, args) -> None:
@@ -279,90 +335,103 @@ class LiDARRTMeter:
         fscore[torch.isnan(fscore)] = 0
         return [fscore, precision_1, precision_2]
 
-    def compute_depth_metrics(self, gt, pred, min_depth=1e-6, max_depth=80):
-        pred[pred < min_depth] = min_depth
-        pred[pred > max_depth] = max_depth
-        gt[gt < min_depth] = min_depth
-        gt[gt > max_depth] = max_depth
+    def compute_depth_metrics(self, gt, pred, min_depth=1e-6, max_depth=150):
+        # pred[pred < min_depth] = min_depth
+        # pred[pred > max_depth] = max_depth
+        # gt[gt < min_depth] = min_depth
+        # gt[gt > max_depth] = max_depth
 
-        rmse = (gt - pred) ** 2
-        rmse = np.sqrt(rmse.mean())
+        # valid_mask = np.logical_and(gt <= 150, gt >= 1e-6)
+        # gt = gt[valid_mask]
+        # pred = pred[valid_mask]
 
-        mae = np.mean(np.abs(gt - pred))
-        medae = np.median(np.abs(gt - pred))
+        depth_median = np.median((pred - gt) ** 2)
+        depth_mean_rel_l2 = np.mean(((pred - gt) / gt) ** 2)
 
-        psnr_loss = 10 * np.log10(max_depth**2 / np.mean((pred - gt) ** 2))
+        # rmse = (gt - pred) ** 2
+        # rmse = np.sqrt(rmse.mean())
 
-        ssim_loss = structural_similarity(
-            pred.squeeze(-1), gt.squeeze(-1), data_range=np.max(gt) - np.min(gt)
-        )
+        # mae = np.mean(np.abs(gt - pred))
+        # medae = np.median(np.abs(gt - pred))
 
-        lpips_loss = self.lpips_fn(
-            torch.from_numpy(pred).permute(2, 0, 1),
-            torch.from_numpy(gt).permute(2, 0, 1),
-            normalize=True,
-        ).item()
+        # psnr_loss = 10 * np.log10(max_depth**2 / np.mean((pred - gt) ** 2))
 
-        return [rmse, mae, medae, lpips_loss, ssim_loss, psnr_loss]
+        # ssim_loss = structural_similarity(
+        #     pred.squeeze(-1), gt.squeeze(-1), data_range=np.max(gt) - np.min(gt)
+        # )
+
+        # lpips_loss = self.lpips_fn(
+        #     torch.from_numpy(pred).permute(2, 0, 1),
+        #     torch.from_numpy(gt).permute(2, 0, 1),
+        #     normalize=True,
+        # ).item()
+
+        return [depth_median, depth_mean_rel_l2]
 
     def compute_intensity_metrics(
         self, gt, pred, min_intensity=1e-6, max_intensity=1.0
     ):
-        pred[pred < min_intensity] = min_intensity
-        pred[pred > max_intensity] = max_intensity
-        gt[gt < min_intensity] = min_intensity
-        gt[gt > max_intensity] = max_intensity
+        rmse = np.sqrt(np.mean((pred - gt) ** 2))
+        # pred[pred < min_intensity] = min_intensity
+        # pred[pred > max_intensity] = max_intensity
+        # gt[gt < min_intensity] = min_intensity
+        # gt[gt > max_intensity] = max_intensity
 
-        rmse = (gt - pred) ** 2
-        rmse = np.sqrt(rmse.mean())
+        # rmse = (gt - pred) ** 2
+        # rmse = np.sqrt(rmse.mean())
 
-        mae = np.mean(np.abs(gt - pred))
-        medae = np.median(np.abs(gt - pred))
+        # mae = np.mean(np.abs(gt - pred))
+        # medae = np.median(np.abs(gt - pred))
 
-        psnr_loss = 10 * np.log10(max_intensity**2 / np.mean((pred - gt) ** 2))
+        # psnr_loss = 10 * np.log10(max_intensity**2 / np.mean((pred - gt) ** 2))
 
-        ssim_loss = structural_similarity(
-            pred.squeeze(-1), gt.squeeze(-1), data_range=np.max(gt) - np.min(gt)
-        )
+        # ssim_loss = structural_similarity(
+        #     pred.squeeze(-1), gt.squeeze(-1), data_range=np.max(gt) - np.min(gt)
+        # )
 
-        lpips_loss = self.lpips_fn(
-            torch.from_numpy(pred).permute(2, 0, 1),
-            torch.from_numpy(gt).permute(2, 0, 1),
-            normalize=True,
-        ).item()
+        # lpips_loss = self.lpips_fn(
+        #     torch.from_numpy(pred).permute(2, 0, 1),
+        #     torch.from_numpy(gt).permute(2, 0, 1),
+        #     normalize=True,
+        # ).item()
 
-        return [rmse, mae, medae, lpips_loss, ssim_loss, psnr_loss]
+        return [rmse]
+        # return [rmse, mae, medae, lpips_loss, ssim_loss, psnr_loss]
 
     def compute_raydrop_metrics(self, gt, pred):
-        rmse = (gt - pred) ** 2
-        rmse = np.sqrt(rmse.mean())
+        # rmse = (gt - pred) ** 2
+        # rmse = np.sqrt(rmse.mean())
 
         preds_mask = np.where(pred > self.raydrop_ratio, 1, 0)
         acc = (preds_mask == gt).mean()
 
-        TP = np.sum((gt == 1) & (preds_mask == 1))
-        FP = np.sum((gt == 0) & (preds_mask == 1))
-        TN = np.sum((gt == 0) & (preds_mask == 0))
-        FN = np.sum((gt == 1) & (preds_mask == 0))
+        # TP = np.sum((gt == 1) & (preds_mask == 1))
+        # FP = np.sum((gt == 0) & (preds_mask == 1))
+        # TN = np.sum((gt == 0) & (preds_mask == 0))
+        # FN = np.sum((gt == 1) & (preds_mask == 0))
 
-        precision = TP / (TP + FP)
-        recall = TP / (TP + FN)
-        f1 = 2 * (precision * recall) / (precision + recall)
+        # precision = TP / (TP + FP)
+        # recall = TP / (TP + FN)
+        # f1 = 2 * (precision * recall) / (precision + recall)
 
-        return [rmse, acc, f1]
+        # return [rmse, acc, f1]
+        return [acc]
+
+
 
     def compute_points_metrics(self, gt, pred):
-        chamLoss = chamfer_3DDist()
-        dist1, dist2, idx1, idx2 = chamLoss(
-            torch.FloatTensor(gt[None, ...]).cuda(),
-            torch.FloatTensor(pred[None, ...]).cuda(),
-        )
-        chamfer_dis = dist1.mean() + dist2.mean()
-        chamfer_dis = chamfer_dis.cpu()
-        f_score, precision, recall = self.compute_fscore(dist1, dist2, threshold=0.05)
-        f_score = f_score.cpu()[0]
+        # chamLoss = chamfer_3DDist()
+        # dist1, dist2, idx1, idx2 = chamLoss(
+        #     torch.FloatTensor(gt[None, ...]).cuda(),
+        #     torch.FloatTensor(pred[None, ...]).cuda(),
+        # )
+        # chamfer_dis = dist1.mean() + dist2.mean()
+        # chamfer_dis = chamfer_dis.cpu()
+        # f_score, precision, recall = self.compute_fscore(dist1, dist2, threshold=0.05)
+        # f_score = f_score.cpu()[0]
 
-        return [chamfer_dis, f_score]
+        # return [chamfer_dis, f_score]
+        return [pcu.chamfer_distance(pred, gt), chamfer_distance(torch.from_numpy(pred).cuda(), torch.from_numpy(gt).cuda(), 1_000, True).cpu().item()]
 
     def run(self):
         frames = []
@@ -406,17 +475,18 @@ class LiDARRTMeter:
                 self.gaussians, self.background, self.scene, frame_id, self.args
             )
 
+            gt_return = render_dict['gt_rayhit']
             depth_per_frame = self.compute_depth_metrics(
-                render_dict["gt_depth"], render_dict["rendered_depth"]
+                render_dict["gt_depth"][gt_return], render_dict["rendered_depth"][gt_return]
             )
             intensity_per_frame = self.compute_intensity_metrics(
-                render_dict["gt_intensity"], render_dict["rendered_intensity"]
+                render_dict["gt_intensity"][gt_return], render_dict["rendered_intensity"][gt_return]
             )
             raydrop_per_frame = self.compute_raydrop_metrics(
                 1 - render_dict["gt_rayhit"], 1 - render_dict["rendered_rayhit"]
             )
             points_per_frame = self.compute_points_metrics(
-                render_dict["gt_pts"], render_dict["rendered_pts"]
+                render_dict["gt_pts"][gt_return.reshape(-1)], render_dict["rendered_pts"][render_dict["rendered_rayhit"].reshape(-1)]
             )
 
             eval_depth.append(depth_per_frame)
@@ -444,12 +514,23 @@ class LiDARRTMeter:
 
             eval_per_frame_dict.update(
                 {
-                    "depth": depth_per_frame_dict,
-                    "intensity": intensity_per_frame_dict,
-                    "raydrop": raydrop_per_frame_dict,
-                    "points": points_per_frame_dict,
+                    "depth_median_l2": float(depth_per_frame[0]),
+                    "depth_mean_rel_l2": float(depth_per_frame[1]),
+                    "intensity_rmse": float(intensity_per_frame[0]),
+                    "ray_drop_accuracy": float(raydrop_per_frame[0]),
+                    "chamfer_distance": float(points_per_frame[0]),
+                    "chamfer_distance_sq": float(points_per_frame[1]),
                 }
             )
+
+            # eval_per_frame_dict.update(
+            #     {
+            #         "depth": depth_per_frame_dict,
+            #         "intensity": intensity_per_frame_dict,
+            #         "raydrop": raydrop_per_frame_dict,
+            #         "points": points_per_frame_dict,
+            #     }
+            # )
 
             eval_all_frame_dict.update({frame_id: eval_per_frame_dict})
 
@@ -490,24 +571,30 @@ class LiDARRTMeter:
         eval_raydrop = np.mean(np.array(eval_raydrop), axis=0)
         eval_points = np.mean(np.array(eval_points), axis=0)
 
-        for metric, result in zip(depth_metrics, eval_depth):
-            depth_dict.update({metric: torch.tensor(result).mean().cpu().item()})
+        # for metric, result in zip(depth_metrics, eval_depth):
+        #     depth_dict.update({metric: torch.tensor(result).mean().cpu().item()})
 
-        for metric, result in zip(intensity_metrics, eval_intensity):
-            intensity_dict.update({metric: torch.tensor(result).mean().cpu().item()})
+        # for metric, result in zip(intensity_metrics, eval_intensity):
+        #     intensity_dict.update({metric: torch.tensor(result).mean().cpu().item()})
 
-        for metric, result in zip(raydrop_metrics, eval_raydrop):
-            raydrop_dict.update({metric: torch.tensor(result).mean().cpu().item()})
+        # for metric, result in zip(raydrop_metrics, eval_raydrop):
+        #     raydrop_dict.update({metric: torch.tensor(result).mean().cpu().item()})
 
-        for metric, result in zip(points_metrics, eval_points):
-            points_dict.update({metric: torch.tensor(result).mean().cpu().item()})
+        # for metric, result in zip(points_metrics, eval_points):
+        #     points_dict.update({metric: torch.tensor(result).mean().cpu().item()})
 
         eval_dict_all.update(
             {
-                "depth": depth_dict,
-                "intensity": intensity_dict,
-                "raydrop": raydrop_dict,
-                "points": points_dict,
+                "depth_median_l2": float(eval_depth[0]),
+                "depth_mean_rel_l2": float(eval_depth[1]),
+                "intensity_rmse": float(eval_intensity[0]),
+                "ray_drop_accuracy": float(eval_raydrop[0]),
+                "chamfer_distance": float(eval_points[0]),
+                "chamfer_distance_sq": float(eval_points[1]),
+                # "depth": depth_dict,
+                # "intensity": intensity_dict,
+                # "raydrop": raydrop_dict,
+                # "points": points_dict,
             }
         )
 

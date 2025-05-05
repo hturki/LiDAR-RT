@@ -1,8 +1,8 @@
 parent_config: "configs/waymo/waymo_base.yaml"
 source_dir: "data/waymo/dynamic/2"
 
-frame_length: [51, 100]
-eval_frames: [60, 70, 80, 90]
+frame_length: [1, 50]
+eval_frames: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
 
 scene_id: wd2
 
