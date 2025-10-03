@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import timeit
 
 import cv2
 import imageio
@@ -177,6 +178,14 @@ class LiDARRTMeter:
             uvz = uvz[mask]
         else:
             sensor = scene.train_lidar
+
+        def timing_test():
+            _ = raytracing(frame_id, gaussians, sensor, background, args)
+            torch.cuda.synchronize()
+
+        torch.cuda.synchronize()
+        render_time_ms = timeit.timeit(timing_test, number=1) * 1000
+
         rendered_pkg = raytracing(frame_id, gaussians, sensor, background, args)
         rendered_depth = rendered_pkg["depth"].detach()
         rendered_intensity = rendered_pkg["intensity"].detach()
@@ -197,6 +206,14 @@ class LiDARRTMeter:
                     dim=0,
                 )
             raydrop_prob = raydrop_prob.unsqueeze(0)
+
+            def timing_test2():
+                _ = self.unet(raydrop_prob).detach().reshape(H, W, 1)
+                torch.cuda.synchronize()
+
+            torch.cuda.synchronize()
+            render_time_ms += timeit.timeit(timing_test2, number=1) * 1000
+
             rendered_raydrop = self.unet(raydrop_prob).detach().reshape(H, W, 1)
 
         gt_rayhit = scene.train_lidar.get_mask(frame_id).unsqueeze(-1)
@@ -294,6 +311,7 @@ class LiDARRTMeter:
                 "gt_rayhit": gt_rayhit,
                 "gt_pts": gt_pts,
                 "rendered_pts": rendered_pts,
+                "render_time_ms": render_time_ms,
             }
         )
 
@@ -436,6 +454,7 @@ class LiDARRTMeter:
     def run(self):
         frames = []
         eval_dict_all = dict()
+        eval_render_time_ms = []
         eval_depth = []
         eval_intensity = []
         eval_raydrop = []
@@ -489,6 +508,7 @@ class LiDARRTMeter:
                 render_dict["gt_pts"][gt_return.reshape(-1)], render_dict["rendered_pts"][render_dict["rendered_rayhit"].reshape(-1)]
             )
 
+            eval_render_time_ms.append(render_dict["render_time_ms"])
             eval_depth.append(depth_per_frame)
             eval_intensity.append(intensity_per_frame)
             eval_raydrop.append(raydrop_per_frame)
@@ -514,6 +534,7 @@ class LiDARRTMeter:
 
             eval_per_frame_dict.update(
                 {
+                    "render_time_ms": float(render_dict["render_time_ms"]),
                     "depth_median_l2": float(depth_per_frame[0]),
                     "depth_mean_rel_l2": float(depth_per_frame[1]),
                     "intensity_rmse": float(intensity_per_frame[0]),
@@ -566,6 +587,7 @@ class LiDARRTMeter:
                     render_dict["rendered_pcd"],
                 )
 
+        eval_render_time_ms = np.mean(np.array(eval_render_time_ms))
         eval_depth = np.mean(np.array(eval_depth), axis=0)
         eval_intensity = np.mean(np.array(eval_intensity), axis=0)
         eval_raydrop = np.mean(np.array(eval_raydrop), axis=0)
@@ -585,6 +607,7 @@ class LiDARRTMeter:
 
         eval_dict_all.update(
             {
+                "render_time_ms": float(eval_render_time_ms),
                 "depth_median_l2": float(eval_depth[0]),
                 "depth_mean_rel_l2": float(eval_depth[1]),
                 "intensity_rmse": float(eval_intensity[0]),

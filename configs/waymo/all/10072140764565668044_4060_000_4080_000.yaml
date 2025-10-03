@@ -1,0 +1,9 @@
+parent_config: "configs/waymo/waymo_base.yaml"
+source_dir: "data/waymo/all/10072140764565668044_4060_000_4080_000"
+
+frame_length: null
+eval_frames: null
+
+scene_id: 10072140764565668044_4060_000_4080_000
+
+dynamic: True

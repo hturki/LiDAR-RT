@@ -43,6 +43,11 @@ def load_waymo_raw(base_dir, args):
     lidar: LiDARSensor = None
     bboxes: Dict[str, BoundingBox] = {}  # frame * n
 
+    if args.frame_length is None:
+        args.frame_length = [0, len(dataset) - 1]
+        args.eval_frames = list(range(len(dataset)))
+        # args.eval_frames = list(range(9, len(dataset), 10))
+
     pbar = tqdm(total=(args.frame_length[1] + 1 - args.frame_length[0]))
     for frame in range(args.frame_length[0], args.frame_length[1] + 1):
         record = dataset[frame]

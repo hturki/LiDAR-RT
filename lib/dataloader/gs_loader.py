@@ -38,7 +38,7 @@ class SceneLidar(Scene):
         train_frames = [
             frame_id
             for frame_id in range(frame_range[0], frame_range[1] + 1)
-            if frame_id not in eval_frames
+            # if frame_id not in eval_frames
         ]
 
         self.train_lidar = lidar

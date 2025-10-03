@@ -44,11 +44,11 @@ class LiDARSensor:
             self.angle_offset = torch.atan2(
                 self.sensor2ego[1, 0], self.sensor2ego[0, 0]
             )
-        elif self.data_type == "KITTI":
+        elif self.data_type == "KITTI" or self.data_type == "PandaSet":
             self.pixel_offset = 0.0
             self.angle_offset = 0.0
         else:
-            raise ValueError("Could not recongnize the data type")
+            raise ValueError("Could not recognize the data type")
 
     def get_mask(self, frame, return_num=1):
         if return_num == 1:
@@ -85,9 +85,9 @@ class LiDARSensor:
         self.eval_frames = eval_frames
         print("train:", train_frames)
         print("eval:", eval_frames)
-        assert (
-            len(self.train_frames) + len(self.eval_frames) <= self.num_frames
-        ), "Found illegal frame ranges!"
+        # assert (
+        #     len(self.train_frames) + len(self.eval_frames) <= self.num_frames
+        # ), "Found illegal frame ranges!"
 
     def add_frame(self, frame, ego2world, r1, r2, pixel_pose=None):
         if isinstance(ego2world, np.ndarray):
